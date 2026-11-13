@@ -1,0 +1,69 @@
+# StudioHub build workflow.
+#
+# Files to upload to your repo root: main.cpp, LeviAbi.hpp, Platform.hpp
+# Workflow file goes at: .github/workflows/build.yml
+#
+# No libpreloader.so needed this time — this mod finds it on the device at
+# runtime via dlopen, so nothing to link against at build time.
+
+name: Build StudioHub
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v4
+
+      - name: Check required files are present
+        run: |
+          test -f main.cpp || { echo "::error::main.cpp not found at repo root"; exit 1; }
+          test -f LeviAbi.hpp || { echo "::error::LeviAbi.hpp not found at repo root"; exit 1; }
+          test -f Platform.hpp || { echo "::error::Platform.hpp not found at repo root"; exit 1; }
+
+      - name: Install Android NDK r28c
+        run: |
+          curl -sSL -o ndk.zip https://dl.google.com/android/repository/android-ndk-r28c-linux.zip
+          unzip -q ndk.zip
+          echo "NDK=$PWD/android-ndk-r28c" >> "$GITHUB_ENV"
+
+      - name: Compile
+        run: |
+          B="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          SYS="$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          mkdir -p out
+          "$B/clang++" \
+            --target=aarch64-linux-android28 --sysroot="$SYS" \
+            -std=c++20 -O2 -DNDEBUG -fPIC -fvisibility=hidden -fvisibility-inlines-hidden \
+            -I. -shared main.cpp \
+            -llog -ldl \
+            -Wl,-z,max-page-size=16384 -Wl,-z,relro -Wl,-z,now -Wl,--build-id=sha1 \
+            -o out/libStudioHub.so
+          "$B/llvm-objcopy" --strip-unneeded out/libStudioHub.so
+
+      - name: Package
+        run: |
+          mkdir -p release
+          cp out/libStudioHub.so release/
+          cat > release/manifest.json <<'EOF'
+          {
+            "type": "preload-native",
+            "name": "StudioHub",
+            "author": "you",
+            "version": "0.1.0",
+            "entry": "libStudioHub.so",
+            "minecraft_versions": ["1.26.*"]
+          }
+          EOF
+
+      - name: Upload result
+        uses: actions/upload-artifact@v4
+        with:
+          name: studiohub-release
+          path: release/
+          
